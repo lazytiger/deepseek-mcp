@@ -1,0 +1,17 @@
+/target
+*.bak
+*.bak-*
+*.log
+*.pid
+server-*.lock
+
+# local runtime config / secrets
+.deepseek-mcp.toml
+deepseek-mcp.toml
+search_mcp.toml
+.dsh/
+
+# editor / OS
+.DS_Store
+.idea/
+.vscode/

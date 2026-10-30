@@ -1,0 +1,64 @@
+# deepseek-mcp configuration
+#
+# Architecture:
+#   deepseek-mcp (stdio, launched by Codex)
+#       -> checks for a live `deepseek-mcp --server` via pid + loopback health
+#       -> starts it if needed
+#       -> proxies tool calls over http://127.0.0.1:<port>
+#
+#   deepseek-mcp --server (long-lived)
+#       -> keeps the HTTPS connection pool warm to api.deepseek.com
+#       -> caches successful search/fetch results
+#
+# Recommended install location:
+#   Windows: C:\Users\<you>\.dsh\search_mcp.toml
+#   Linux:   ~/.dsh/search_mcp.toml
+#
+# Legacy/config-dir locations are still searched:
+#   ./deepseek-mcp.toml
+#   %APPDATA%\deepseek-mcp\config.toml
+#   ~/.config/deepseek-mcp/config.toml
+#   ~/.deepseek-mcp.toml
+#
+# Or pass an explicit path:
+#   deepseek-mcp --config C:\Users\you\.dsh\search_mcp.toml
+
+[deepseek]
+# Direct API key. Keep this file private.
+api_key = "sk-your-deepseek-api-key"
+
+# Instead of api_key, you can name an environment variable:
+# api_key_env = "DEEPSEEK_API_KEY"
+
+# DeepSeek API base URL. Do not append /v1 here; the server adds the paths.
+base_url = "https://api.deepseek.com"
+
+# Per-request HTTP timeout.
+timeout_secs = 30
+
+# Retries for 408, 429 and 5xx responses. 0 disables retries; max 5.
+max_retries = 2
+
+[server]
+# Loopback address for the long-lived daemon. Must be 127.0.0.1 or ::1.
+bind = "127.0.0.1"
+port = 9317
+
+# How long the stdio front-end waits for a newly spawned daemon.
+startup_timeout_secs = 10
+
+# Optional overrides. Defaults are under the user cache directory:
+#   Windows: %LOCALAPPDATA%\deepseek-mcp\server-9317.pid / .log
+#   Linux:   ~/.cache/deepseek-mcp/server-9317.pid / .log
+# pid_file = "C:\\Users\\you\\AppData\\Local\\deepseek-mcp\\server-9317.pid"
+# log_file = "C:\\Users\\you\\AppData\\Local\\deepseek-mcp\\server-9317.log"
+
+[cache]
+# Successful search results are cached for this many seconds.
+search_ttl_secs = 300
+
+# Fetched pages are cached for this many seconds.
+fetch_ttl_secs = 3600
+
+# Maximum number of cached entries (search + fetch combined).
+max_entries = 500
