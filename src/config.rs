@@ -22,6 +22,8 @@ pub struct DeepSeekConfig {
     pub api_key: Option<String>,
     /// Alternatively, the name of an environment variable that holds the key.
     pub api_key_env: Option<String>,
+    /// File containing the API key. Defaults to ~/.dsh/deepseek_api_key if present.
+    pub api_key_file: Option<PathBuf>,
     #[serde(default = "default_base_url")]
     pub base_url: String,
     #[serde(default = "default_timeout_secs")]
@@ -173,33 +175,47 @@ impl Config {
         self.deepseek.base_url.trim_end_matches('/').to_string()
     }
 
-    /// Resolve the API key from config, an explicitly named env var, or DEEPSEEK_API_KEY.
+    /// Resolve the API key from config, key file, or environment.
     pub fn resolve_api_key(&self) -> Result<String> {
-        let key = self
+        let direct = self
             .deepseek
             .api_key
             .as_deref()
             .map(str::trim)
             .filter(|s| !s.is_empty())
-            .map(ToOwned::to_owned)
-            .or_else(|| {
-                self.deepseek
-                    .api_key_env
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty())
-                    .and_then(|name| env::var(name).ok())
-            })
-            .or_else(|| env::var("DEEPSEEK_API_KEY").ok())
-            .context(
-                "DeepSeek API key not found: set deepseek.api_key in the config file, \
-                 deepseek.api_key_env, or the DEEPSEEK_API_KEY environment variable",
-            )?;
+            .map(ToOwned::to_owned);
 
-        let key = key.trim().to_string();
-        if key.is_empty() {
-            bail!("DeepSeek API key is empty");
-        }
+        let configured_file = self.deepseek.api_key_file.clone();
+        let default_file = dirs::home_dir()
+            .map(|home| home.join(".dsh").join("deepseek_api_key"))
+            .filter(|path| path.is_file());
+        let file_key = configured_file
+            .and_then(|path| fs::read_to_string(path).ok())
+            .or_else(|| default_file.and_then(|path| fs::read_to_string(path).ok()))
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+
+        let env_name = self
+            .deepseek
+            .api_key_env
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        let env_key = env_name
+            .and_then(|name| env::var(name).ok())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .or_else(|| {
+                env::var("DEEPSEEK_API_KEY")
+                    .ok()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+            });
+
+        let key = direct.or(file_key).or(env_key).context(
+            "DeepSeek API key not found: set deepseek.api_key, deepseek.api_key_file, \
+             deepseek.api_key_env, or DEEPSEEK_API_KEY",
+        )?;
         if !key.starts_with("sk-") {
             bail!("DeepSeek API key should start with \"sk-\"");
         }
@@ -243,10 +259,13 @@ impl Config {
 }
 
 fn state_dir() -> PathBuf {
-    dirs::cache_dir()
-        .or_else(dirs::data_local_dir)
+    // Keep runtime state next to the .dsh config instead of using
+    // dirs::cache_dir(): Codex's MSIX package redirects LocalAppData, so
+    // different front-ends could otherwise use different lock/PID files.
+    dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join("deepseek-mcp")
+        .join(".dsh")
+        .join("run")
 }
 
 pub fn config_search_paths() -> Vec<PathBuf> {

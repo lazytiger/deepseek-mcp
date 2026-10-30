@@ -82,7 +82,10 @@ Copy `deepseek-mcp.example.toml` and set your DeepSeek API key:
 
 ```toml
 [deepseek]
-api_key = "sk-..."
+# Recommended: an ACL-protected file outside the repo.
+api_key_file = "C:/Users/<you>/.dsh/deepseek_api_key"
+# Or use an environment variable instead:
+# api_key_env = "DEEPSEEK_API_KEY"
 base_url = "https://api.deepseek.com"
 timeout_secs = 30
 max_retries = 2
@@ -98,14 +101,12 @@ fetch_ttl_secs = 3600
 max_entries = 500
 ```
 
-If you do not want the key in the file:
-
-```toml
-[deepseek]
-api_key_env = "DEEPSEEK_API_KEY"
-```
-
-The daemon also falls back to `DEEPSEEK_API_KEY`.
+Key resolution order: `api_key`, `api_key_file`, the named `api_key_env`, then
+`DEEPSEEK_API_KEY`. If no `api_key_file` is configured, the daemon also tries
+`~/.dsh/deepseek_api_key` when that file exists. Codex must pass an environment
+variable through to the MCP child if you use `api_key_env`; see `env_vars`
+below. The key-file path avoids that dependency entirely and is the recommended
+setup for Codex Desktop.
 
 Config search order:
 
@@ -135,7 +136,16 @@ On Linux:
 ```
 
 Copy the release binary into `.dsh/bin`; copy
-`deepseek-mcp.example.toml` to `.dsh/search_mcp.toml` and set the API key.
+`deepseek-mcp.example.toml` to `.dsh/search_mcp.toml` and put the API key in
+`C:\Users\<you>\.dsh\deepseek_api_key` (one line, no quotes). Restrict both
+files to the current user and the Codex sandbox group:
+
+```powershell
+icacls "$env:USERPROFILE\.dsh\deepseek_api_key" /inheritance:r `
+  /grant:r "$env:USERNAME:(R)" "CodexSandboxUsers:(R)" `
+  "SYSTEM:(F)" "Administrators:(F)"
+```
+
 The front-end searches `.dsh/search_mcp.toml` by default, so Codex can also omit
 `--config` entirely.
 
@@ -144,11 +154,15 @@ The front-end searches `.dsh/search_mcp.toml` by default, so Codex can also omit
 ```toml
 [mcp_servers.deepseek_search]
 command = 'C:\Users\<you>\.dsh\bin\deepseek-mcp.exe'
+# env_vars = ["DEEPSEEK_API_KEY"]  # only needed for api_key_env
+startup_timeout_sec = 30
 # No args: stdio mode; config is found at ~/.dsh/search_mcp.toml.
 ```
 
 No arguments means stdio mode. Codex does not pass `--server`; the front-end
-starts the daemon itself.
+starts the daemon lazily on the first paid tool call. With `api_key_file`, no
+environment variable is needed. If you use `api_key_env`, add
+`env_vars = ["DEEPSEEK_API_KEY"]` so Codex forwards it to the MCP child.
 
 Manual daemon run for debugging:
 
@@ -158,23 +172,29 @@ deepseek-mcp.exe --server --config C:\Users\<you>\.dsh\search_mcp.toml
 
 ## Lifecycle
 
-On startup with no `--server`, the binary:
+With no `--server`, the binary **serves stdio MCP immediately**. It does not
+start or wait for the daemon during `initialize`/`tools/list`; this avoids Codex
+MCP startup timeouts and tool-discovery races.
+
+On the first **paid** tool call (one with `confirm=true`):
 
 1. Reads the daemon PID file and calls `GET /health`.
 2. If healthy, reuses the daemon.
 3. Otherwise takes an exclusive lock, removes a stale PID file, launches the
    **same executable** with `--server --config ...` detached, and waits for
    `/health` for up to `server.startup_timeout_secs`.
-4. If the daemon cannot become healthy, exits with an error and the log path.
+4. If the daemon cannot become healthy, returns a tool error with the log path.
 
-The daemon survives the stdio process, so the next Codex session reuses the warm
-HTTPS pool and cache.
+PID, lock, and log files live under the stable `~/.dsh/run` directory, so Codex's
+MSIX package redirection of `%LOCALAPPDATA%` cannot split the single-instance
+lock. The daemon survives the stdio process, so the next Codex session reuses the
+warm HTTPS pool and cache.
 
 Default daemon files (port 9317):
 
 ```text
-Windows: %LOCALAPPDATA%\deepseek-mcp\server-9317.pid / .log
-Linux:   ~/.cache/deepseek-mcp/server-9317.pid / .log
+Windows: %USERPROFILE%\.dsh\run\server-9317.pid / .log / .lock
+Linux:   ~/.dsh/run/server-9317.pid / .log / .lock
 ```
 
 Override with `server.pid_file` / `server.log_file`.
@@ -187,12 +207,12 @@ next MCP start it:
 
 ```powershell
 # Windows
-Stop-Process -Id (Get-Content "$env:LOCALAPPDATA\deepseek-mcp\server-9317.pid")
+Stop-Process -Id (Get-Content "$env:USERPROFILE\.dsh\run\server-9317.pid")
 ```
 
 ```bash
 # Linux
-kill "$(cat ~/.cache/deepseek-mcp/server-9317.pid)"
+kill "$(cat ~/.dsh/run/server-9317.pid)"
 ```
 
 A stale PID file is removed automatically on the next start. A version mismatch
@@ -228,14 +248,18 @@ Parameters:
 | Field | Type | Required | Notes |
 |---|---|---|---|
 | `query` | string | yes | 1–128 chars; supports `site:`, `lang:`, `after:`, `before:`, quotes, `-` exclusions |
-| `count` | integer | no | 1–50, default 10 |
+| `count` | integer | no | 1–50, default 5 |
 | `need_content` | boolean | no | Include page content; may be large |
 | `ori_question` | string | no | Original user question, up to 128 chars |
 | `localization` | string | no | Optional IP for localized results |
+| `confirm` | boolean | yes | Must be `true`; acknowledges the billable call |
+| `compact` | boolean | no | Default `true`: title/url/summary/date/authority/source_tier only; summary is capped at 500 chars |
 
-Returns JSON with `query`, `count`, `need_content`, and `results[]`
-(`title`, `url`, `snippet`, `summary`, `content`, `date`, `authority`,
-`rerank_score`).
+Returns JSON with `query`, `count`, `need_content`, `untrusted: true`, a
+`security_note`, and `results[]`. Compact results omit `snippet`, full `summary`,
+and `content` unless `need_content=true`; use `compact=false` for all fields.
+Results are deduplicated by URL and tagged `source_tier`:
+`official`, `media`, `aggregator`, or `unknown`.
 
 ### `paid_fetch`
 
@@ -247,8 +271,11 @@ Parameters:
 | Field | Type | Required | Notes |
 |---|---|---|---|
 | `url` | string | yes | HTTP/HTTPS, no username/password, max 8192 chars |
+| `confirm` | boolean | yes | Must be `true`; acknowledges the billable call |
+| `max_chars` | integer | no | Max Markdown characters returned, default 20000, clamped to 1–100000 |
 
-Returns JSON with `url`, `title`, and Markdown `content`.
+Returns JSON with `url`, `title`, Markdown `content`, `untrusted: true`, and a
+`security_note`. Truncated content ends with `[truncated]`.
 
 Fetch is a reader, not a browser: no JavaScript rendering, login/paywall access,
 or anti-bot bypass guarantees.
@@ -273,6 +300,12 @@ The daemon caches only successful responses:
 - 400/401/402/403/404 are returned as tool errors with the upstream message.
 - API keys are never logged.
 - Logs go to stderr for stdio and to `server.log_file` for the daemon.
+- Every daemon request logs `request_id`, `tool`, `duration_ms`, `cache_hit`,
+  `result_count`, `http_status`, and `billed`; query text is not logged.
+- A successful cached request logs `billed=false`; an upstream success logs
+  `billed=true`. A failed request logs `billed=false` with the upstream status.
+- Startup now serves stdio immediately; a missing key is reported on the first
+  paid call instead of closing the `initialize` response.
 - Set `RUST_LOG=debug` for more detail (the front-end passes its environment to
   the daemon when spawning it).
 

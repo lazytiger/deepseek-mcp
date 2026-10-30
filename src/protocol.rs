@@ -35,6 +35,9 @@ pub struct SearchResult {
     pub date: Option<String>,
     #[serde(default)]
     pub authority: Option<i32>,
+    /// official | media | aggregator | unknown, added by the daemon.
+    #[serde(default)]
+    pub source_tier: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

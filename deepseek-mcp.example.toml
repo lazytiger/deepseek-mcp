@@ -24,11 +24,15 @@
 #   deepseek-mcp --config C:\Users\you\.dsh\search_mcp.toml
 
 [deepseek]
-# Direct API key. Keep this file private.
-api_key = "sk-your-deepseek-api-key"
+# Recommended: ACL-protected key file (one line, no quotes).
+# If omitted, ~/.dsh/deepseek_api_key is used when present.
+# api_key_file = "C:/Users/you/.dsh/deepseek_api_key"
 
-# Instead of api_key, you can name an environment variable:
-# api_key_env = "DEEPSEEK_API_KEY"
+# Or use an environment variable:
+api_key_env = "DEEPSEEK_API_KEY"
+
+# Standalone fallback (not recommended; keep the file ACL tight):
+# api_key = "sk-your-deepseek-api-key"
 
 # DeepSeek API base URL. Do not append /v1 here; the server adds the paths.
 base_url = "https://api.deepseek.com"
@@ -48,8 +52,8 @@ port = 9317
 startup_timeout_secs = 10
 
 # Optional overrides. Defaults are under the user cache directory:
-#   Windows: %LOCALAPPDATA%\deepseek-mcp\server-9317.pid / .log
-#   Linux:   ~/.cache/deepseek-mcp/server-9317.pid / .log
+#   Windows: %USERPROFILE%\.dsh\run\server-9317.pid / .log
+#   Linux:   ~/.dsh/run/server-9317.pid / .log
 # pid_file = "C:\\Users\\you\\AppData\\Local\\deepseek-mcp\\server-9317.pid"
 # log_file = "C:\\Users\\you\\AppData\\Local\\deepseek-mcp\\server-9317.log"
 

@@ -2,6 +2,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
@@ -14,6 +15,16 @@ use crate::protocol::{
     ErrorResponse, FetchRequest, FetchResponse, HealthResponse, SERVICE_NAME, SearchRequest,
     SearchResponse,
 };
+
+static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
+
+pub fn new_request_id() -> String {
+    format!(
+        "{}-{}",
+        std::process::id(),
+        NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed)
+    )
+}
 
 #[derive(Clone)]
 pub struct DaemonClient {
@@ -57,18 +68,22 @@ impl DaemonClient {
         Ok(health)
     }
 
-    pub async fn search(&self, request: &SearchRequest) -> Result<SearchResponse, String> {
-        self.post("/v1/search", request).await
+    pub async fn search(
+        &self,
+        request_id: &str,
+        request: &SearchRequest,
+    ) -> Result<SearchResponse, String> {
+        self.post("/v1/search", request_id, request).await
     }
 
-    pub async fn fetch_page(&self, url: &str) -> Result<FetchResponse, String> {
+    pub async fn fetch_page(&self, request_id: &str, url: &str) -> Result<FetchResponse, String> {
         let request = FetchRequest {
             url: url.to_string(),
         };
-        self.post("/v1/fetch", &request).await
+        self.post("/v1/fetch", request_id, &request).await
     }
 
-    async fn post<T, B>(&self, path: &str, body: &B) -> Result<T, String>
+    async fn post<T, B>(&self, path: &str, request_id: &str, body: &B) -> Result<T, String>
     where
         T: DeserializeOwned,
         B: Serialize,
@@ -76,6 +91,7 @@ impl DaemonClient {
         let response = self
             .http
             .post(format!("{}{path}", self.base_url))
+            .header("x-request-id", request_id)
             .json(body)
             .send()
             .await
